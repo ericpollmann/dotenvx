@@ -1,0 +1,5 @@
+*.out
+/cmd/decrypt/decrypt
+/decrypt
+.vscode/
+.DS_Store
