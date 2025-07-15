@@ -11,23 +11,36 @@ import (
 )
 
 var (
-	Once   sync.Once
+	Debug  bool = true
 	EnvMap map[string]string
 	Mu     sync.Mutex
+	Once   sync.Once
 )
 
 func loadEnv() {
 	EnvMap = make(map[string]string)
 
+	if Debug {
+		println("Checking for private key in environment")
+	}
 	keyHex, fileName := os.Getenv("DOTENV_PRIVATE_KEY_PRODUCTION"), ".env.production"
 	if keyHex == "" {
+		if Debug {
+			println("Not production, trying local key")
+		}
 		keyHex, fileName = os.Getenv("DOTENV_PRIVATE_KEY"), ".env"
 		if keyHex == "" {
+			if Debug {
+				println("No key found")
+			}
 			return
 		}
 	}
 	file, err := os.Open(fileName)
 	if err != nil {
+		if Debug {
+			println("Unable to open: " + fileName)
+		}
 		return
 	}
 	defer file.Close()
@@ -55,7 +68,15 @@ func GetenvMap() map[string]string {
 }
 
 func Getenv(key string) string {
-	return GetenvMap()[key]
+	envMap := GetenvMap()
+	val, found := envMap[key]
+	if Debug && !found {
+		println("Not found in env file: " + key)
+	}
+	if Debug && len(val) == 0 {
+		println("Empty string value for $" + key)
+	}
+	return val
 }
 
 func Environ() []string {
