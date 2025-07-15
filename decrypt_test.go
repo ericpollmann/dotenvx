@@ -2,8 +2,17 @@ package dotenvx
 
 import (
 	"os"
+	"sync"
 	"testing"
 )
+
+// reset clears cached state for testing
+func reset() {
+	Mu.Lock()
+	defer Mu.Unlock()
+	Once = sync.Once{}
+	EnvMap = nil
+}
 
 func TestDevelopment(t *testing.T) {
 	os.Unsetenv("DOTENV_PRIVATE_KEY_PRODUCTION")
@@ -50,5 +59,30 @@ func TestNoKeys(t *testing.T) {
 
 	if got := Getenv("ANYTHING"); got != "" {
 		t.Errorf("no keys: expected empty, got %q", got)
+	}
+}
+
+func TestFileNotFound(t *testing.T) {
+	os.Unsetenv("DOTENV_PRIVATE_KEY_PRODUCTION")
+	os.Setenv("DOTENV_PRIVATE_KEY", "2ff9d3716a37e630e0643447beac508a1e9963444d3ca00a6a22dbf2970dc03d")
+	
+	// Change to a directory where .env doesn't exist
+	originalDir, _ := os.Getwd()
+	defer os.Chdir(originalDir)
+	
+	tempDir := "/tmp"
+	os.Chdir(tempDir)
+	reset()
+
+	if len(GetenvMap()) != 0 {
+		t.Error("file not found: expected empty map")
+	}
+
+	if len(Environ()) != 0 {
+		t.Error("file not found: expected empty environ")
+	}
+
+	if got := Getenv("ANYTHING"); got != "" {
+		t.Errorf("file not found: expected empty, got %q", got)
 	}
 }

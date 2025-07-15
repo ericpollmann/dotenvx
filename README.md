@@ -20,8 +20,8 @@ envMap := dotenvx.GetenvMap()
 # Build a tiny working docker image, including go runtime, a 1.32MB image
 % docker build -t dotenvx-decrypt .
 % docker images | head -2
-REPOSITORY                                                    TAG               IMAGE ID       CREATED         SIZE
-dotenvx-decrypt                                               latest            4ef1538e3216   2 minutes ago   1.32MB
+REPOSITORY                                                    TAG               IMAGE ID       CREATED                  SIZE
+dotenvx-decrypt                                               latest            8a6f30b246ca   Less than a second ago   1.32MB
 
 # Development uses .env, production uses .env.production
 % docker run -e DOTENV_PRIVATE_KEY="2ff9d3716a37e630e0643447beac508a1e9963444d3ca00a6a22dbf2970dc03d" dotenvx-decrypt
@@ -31,9 +31,9 @@ GREETING=hello
 DOTENV_PUBLIC_KEY_PRODUCTION="03f3775e90efd546ad247a3fdcc0d9ef664743579fdd4f7e6c5e6bd73c61f6dc54"
 GREETING=world
 
-% go test ./... -cover    
-ok	github.com/ericpollmann/dotenvx	(cached)	    coverage: 97.1% of statements
-	github.com/ericpollmann/dotenvx/cmd/decrypt		coverage: 0.0% of statements
+% go test ./... -cover
+ok  	github.com/ericpollmann/dotenvx	0.122s	coverage: 100.0% of statements
+ok  	github.com/ericpollmann/dotenvx/cmd/decrypt	0.200s	coverage: 100.0% of statements
 ```
 
 ## Files
