@@ -11,41 +11,83 @@ import (
 )
 
 var (
-	Debug  bool = true
+	Debug  bool
 	EnvMap map[string]string
 	Mu     sync.Mutex
 	Once   sync.Once
 )
 
-func loadEnv() {
-	EnvMap = make(map[string]string)
+type EnvFile struct {
+	Path string
+	Key  string
+}
+
+// searches for DOTENV_PRIVATE_KEY* environment variables, returns all potential file/key pairs
+func findEnvFiles() []EnvFile {
+	var envFiles []EnvFile
 
 	if Debug {
 		println("Checking for private key in environment")
 	}
-	keyHex, fileName := os.Getenv("DOTENV_PRIVATE_KEY_PRODUCTION"), ".env.production"
-	if keyHex == "" {
-		if Debug {
-			println("Not production, trying local key")
-		}
-		keyHex, fileName = os.Getenv("DOTENV_PRIVATE_KEY"), ".env"
-		if keyHex == "" {
-			if Debug {
-				println("No key found")
+
+	for _, env := range os.Environ() {
+		if strings.HasPrefix(env, "DOTENV_PRIVATE_KEY") {
+			parts := strings.SplitN(env, "=", 2)
+			if len(parts) != 2 || parts[1] == "" {
+				continue
 			}
-			return
+
+			varName := parts[0]
+			keyHex := parts[1]
+
+			// Map DOTENV_PRIVATE_KEY_SUFFIX to .env.suffix
+			fileName := ""
+			if varName == "DOTENV_PRIVATE_KEY" {
+				fileName = ".env"
+			} else if strings.HasPrefix(varName, "DOTENV_PRIVATE_KEY_") {
+				suffix := strings.TrimPrefix(varName, "DOTENV_PRIVATE_KEY_")
+				// Convert suffix to lowercase, replace _ with .
+				suffix = strings.ToLower(suffix)
+				suffix = strings.ReplaceAll(suffix, "_", ".")
+				fileName = ".env." + suffix
+			}
+
+			if Debug {
+				println("Trying key " + varName + " with file " + fileName)
+			}
+
+			envFiles = append(envFiles, EnvFile{Path: fileName, Key: keyHex})
 		}
 	}
-	file, err := os.Open(fileName)
+
+	if len(envFiles) == 0 && Debug {
+		println("No key found")
+	}
+
+	return envFiles
+}
+
+func processEnvFile(envFile *EnvFile) error {
+	file, err := os.Open(envFile.Path)
 	if err != nil {
 		if Debug {
-			println("Unable to open: " + fileName)
+			if os.IsNotExist(err) {
+				println("File not found: " + envFile.Path)
+			} else {
+				println("Unable to open: " + envFile.Path)
+			}
 		}
-		return
+		return err
 	}
 	defer file.Close()
 
-	privateKey, _ := ecies.NewPrivateKeyFromHex(keyHex)
+	privateKey, err := ecies.NewPrivateKeyFromHex(envFile.Key)
+	if err != nil {
+		if Debug {
+			println("Invalid key format")
+		}
+		return err
+	}
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
@@ -53,15 +95,13 @@ func loadEnv() {
 		if offset := strings.Index(line, "="); offset > 0 && line[0] != '#' {
 			varName := strings.TrimPrefix(line[:offset], "export ")
 			value := line[offset+1:]
-			
-			// Strip surrounding quotes if present
+
 			value = strings.TrimSpace(value)
 			if (strings.HasPrefix(value, `"`) && strings.HasSuffix(value, `"`)) ||
-			   (strings.HasPrefix(value, `'`) && strings.HasSuffix(value, `'`)) {
-				value = value[1:len(value)-1]
+				(strings.HasPrefix(value, `'`) && strings.HasSuffix(value, `'`)) {
+				value = value[1 : len(value)-1]
 			}
-			
-			// Check if it's an encrypted value
+
 			if strings.HasPrefix(value, "encrypted:") {
 				cipherBytes, _ := base64.StdEncoding.DecodeString(value[10:])
 				plainBytes, _ := ecies.Decrypt(privateKey, cipherBytes)
@@ -69,6 +109,19 @@ func loadEnv() {
 			} else {
 				EnvMap[varName] = value
 			}
+		}
+	}
+
+	return scanner.Err()
+}
+
+func loadEnv() {
+	EnvMap = make(map[string]string)
+
+	for _, envFile := range findEnvFiles() {
+		err := processEnvFile(&envFile)
+		if err == nil {
+			return
 		}
 	}
 }
@@ -81,11 +134,13 @@ func GetenvMap() map[string]string {
 func Getenv(key string) string {
 	envMap := GetenvMap()
 	val, found := envMap[key]
-	if Debug && !found {
-		println("Not found in env file: " + key)
-	}
-	if Debug && len(val) == 0 {
-		println("Empty string value for $" + key)
+	if Debug {
+		if !found {
+			println("Not found in env file: " + key)
+		}
+		if len(val) == 0 {
+			println("Empty string value: " + key)
+		}
 	}
 	return val
 }

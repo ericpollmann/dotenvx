@@ -2,12 +2,12 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"strings"
-	"testing"
-	"io"
 	"sync"
-	
+	"testing"
+
 	"github.com/ericpollmann/dotenvx"
 )
 
@@ -22,7 +22,7 @@ func reset() {
 func TestMainWithEnv(t *testing.T) {
 	// Reset cache before test
 	reset()
-	
+
 	// Save original working directory and stdout
 	originalDir, _ := os.Getwd()
 	defer os.Chdir(originalDir)
@@ -34,7 +34,7 @@ func TestMainWithEnv(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(tempDir)
-	
+
 	// Change to temp directory
 	os.Chdir(tempDir)
 
@@ -84,7 +84,7 @@ QUOTED_PLAIN="quoted value"
 func TestAMainNoEnv(t *testing.T) {
 	// Reset cache before test
 	reset()
-	
+
 	// Save original working directory and stdout
 	originalDir, _ := os.Getwd()
 	defer os.Chdir(originalDir)
@@ -96,7 +96,7 @@ func TestAMainNoEnv(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(tempDir)
-	
+
 	// Change to temp directory (no .env files)
 	os.Chdir(tempDir)
 

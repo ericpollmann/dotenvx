@@ -132,3 +132,20 @@
 
 > no undo that, the reset change was intentional to DRY up the code
 
+> Make this code more generic and call os.Environ to search for any env variable DOTENV_PRIVATE_KEY*, mapping any
+  _ to . and any suffix to lowercase of that string to get the file to use.
+  keyHex, fileName := os.Getenv("DOTENV_PRIVATE_KEY_PRODUCTION"), ".env.production"
+	if keyHex == "" {
+		keyHex, fileName = os.Getenv("DOTENV_PRIVATE_KEY"), ".env"
+    ...
+
+> check existing unit tests pass and have 100% coverage still
+
+> look at go cover output to find any untested lines and test them
+
+> what lines are not covered by tests - if we can't test the lines do we need them?
+
+> It feels like loadEnv is doing two things now: find file and process file, can we split it into two and update all 
+  the tests, keeping the same bar for perfect test coverage and using that as a filter for if our code quality is 
+  high enough
+

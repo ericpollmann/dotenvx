@@ -17,11 +17,11 @@ envMap := dotenvx.GetenvMap()
 ## Minimal working example with Dockerfile
 
 ```bash
-# Build a tiny working docker image, including go runtime, a 1.32MB image
+# Build a tiny working docker image, including go runtime, a 1.33MB image
 % docker build -t dotenvx-decrypt .
 % docker images | head -2
 REPOSITORY                                                    TAG               IMAGE ID       CREATED                  SIZE
-dotenvx-decrypt                                               latest            8a6f30b246ca   Less than a second ago   1.32MB
+dotenvx-decrypt                                               latest            c01181d8be84   Less than a second ago   1.33MB
 
 # Development uses .env, production uses .env.production
 % docker run -e DOTENV_PRIVATE_KEY="2ff9d3716a37e630e0643447beac508a1e9963444d3ca00a6a22dbf2970dc03d" dotenvx-decrypt
@@ -39,7 +39,7 @@ ok  	github.com/ericpollmann/dotenvx/cmd/decrypt	0.200s	coverage: 100.0% of stat
 ## Files
 
 - `decrypt.go` - Decrypts `encrypted:` values using ECIES
-- `Dockerfile` - Example multi-stage build with UPX compression (1.32MB binary)
+- `Dockerfile` - Example multi-stage build with UPX compression (1.33MB binary)
 - `go.mod` / `go.sum` - Dependencies (uses `github.com/ecies/go/v2`)
 
 ## How It Works
