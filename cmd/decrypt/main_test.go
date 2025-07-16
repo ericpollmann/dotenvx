@@ -38,10 +38,11 @@ func TestMainWithEnv(t *testing.T) {
 	// Change to temp directory
 	os.Chdir(tempDir)
 
-	// Create test .env file
+	// Create test .env file with both quoted and unquoted values
 	envContent := `DOTENV_PUBLIC_KEY="020c5f23e6e02f087af380212814755c22f3d742b218666642d1dec184b7c6ae69"
-GREETING=encrypted:BL8cvfR8496FAJV3dbdSZj/D6qlhOc3lAhuAB24AGp4WASPH8BBoe21T+T9jlO/M0GY03RZ94Etk7VPWIP21vh+YLGu0fWe2usFdTFs+/BnlsT8K8+V9Xte/yXA2NhrRxy3T7ygL
+GREETING="encrypted:BL8cvfR8496FAJV3dbdSZj/D6qlhOc3lAhuAB24AGp4WASPH8BBoe21T+T9jlO/M0GY03RZ94Etk7VPWIP21vh+YLGu0fWe2usFdTFs+/BnlsT8K8+V9Xte/yXA2NhrRxy3T7ygL"
 PLAIN_VALUE=hello
+QUOTED_PLAIN="quoted value"
 `
 	if err := os.WriteFile(".env", []byte(envContent), 0644); err != nil {
 		t.Fatal(err)
@@ -74,6 +75,9 @@ PLAIN_VALUE=hello
 	}
 	if !strings.Contains(output, "PLAIN_VALUE=hello") {
 		t.Error("Expected PLAIN_VALUE=hello in output")
+	}
+	if !strings.Contains(output, "QUOTED_PLAIN=quoted value") {
+		t.Error("Expected QUOTED_PLAIN=quoted value in output")
 	}
 }
 

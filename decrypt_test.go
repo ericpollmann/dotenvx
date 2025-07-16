@@ -90,3 +90,50 @@ func TestFileNotFound(t *testing.T) {
 		t.Errorf("file not found: expected empty, got %q", got)
 	}
 }
+
+func TestQuotedValues(t *testing.T) {
+	// Create temp directory for test
+	tempDir, err := os.MkdirTemp("", "dotenvx_quoted_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+	
+	originalDir, _ := os.Getwd()
+	defer os.Chdir(originalDir)
+	os.Chdir(tempDir)
+	
+	// Create .env file with quoted values
+	envContent := `# Test file with quoted values
+DOTENV_PUBLIC_KEY="020c5f23e6e02f087af380212814755c22f3d742b218666642d1dec184b7c6ae69"
+export GREETING="encrypted:BL8cvfR8496FAJV3dbdSZj/D6qlhOc3lAhuAB24AGp4WASPH8BBoe21T+T9jlO/M0GY03RZ94Etk7VPWIP21vh+YLGu0fWe2usFdTFs+/BnlsT8K8+V9Xte/yXA2NhrRxy3T7ygL"
+PLAIN_DOUBLE="hello world"
+PLAIN_SINGLE='single quoted'
+PLAIN_UNQUOTED=unquoted
+ENCRYPTED_UNQUOTED=encrypted:BL8cvfR8496FAJV3dbdSZj/D6qlhOc3lAhuAB24AGp4WASPH8BBoe21T+T9jlO/M0GY03RZ94Etk7VPWIP21vh+YLGu0fWe2usFdTFs+/BnlsT8K8+V9Xte/yXA2NhrRxy3T7ygL
+`
+	if err := os.WriteFile(".env", []byte(envContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	reset("dev")
+
+	// Test that all values are parsed correctly
+	tests := []struct {
+		key      string
+		expected string
+	}{
+		{"DOTENV_PUBLIC_KEY", "020c5f23e6e02f087af380212814755c22f3d742b218666642d1dec184b7c6ae69"},
+		{"GREETING", "hello"},
+		{"PLAIN_DOUBLE", "hello world"},
+		{"PLAIN_SINGLE", "single quoted"},
+		{"PLAIN_UNQUOTED", "unquoted"},
+		{"ENCRYPTED_UNQUOTED", "hello"},
+	}
+
+	for _, tt := range tests {
+		if got := Getenv(tt.key); got != tt.expected {
+			t.Errorf("Getenv(%q) = %q, want %q", tt.key, got, tt.expected)
+		}
+	}
+}
