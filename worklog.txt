@@ -149,3 +149,21 @@
   the tests, keeping the same bar for perfect test coverage and using that as a filter for if our code quality is 
   high enough
 
+> (many manual edits)
+
+> i made a bunch of updates, fix tests
+
+> now with the new refactoring in decrypt, can we have fewer more focused tests and still achieve 100%?
+
+> A much smaller number of generic named test feels like optimizing for the wrong thing, I don't mind having many focused tests named after what they do. I just wanted to see if we could use the
+  smaller focused functions in decrypt.go to avoid having to mock out as many things in complicated scenarios and instead directly test the inner logic (formerly inner logic) can we split the test
+  back up to name them semantically after the case each one is testing vs. huge generic core test
+
+⏺ I see the file has been completely refactored already! It looks like someone has already split it into smaller, focused functions:
+  - getEnvFile() - finds the environment file and key
+  - decryptSecret() - handles decryption
+  - parseEnvVar() - parses a single line
+  - getEnvVars() - reads and processes the file
+
+  This is great! Now let's update the tests to match this new structure and create focused tests for each function. First, let me check the current test file:
+
