@@ -3,42 +3,44 @@ package dotenvx
 import (
 	"bufio"
 	"encoding/base64"
+	"fmt"
 	"os"
 	"strings"
-	"sync"
 
 	ecies "github.com/ecies/go/v2"
 )
 
 var (
-	Debug  bool
-	EnvMap map[string]string
-	Mu     sync.Mutex
-	Once   sync.Once
+	Debug bool
 )
 
 type EnvFile struct {
 	Path string
-	Key  string
+	Key  *ecies.PrivateKey
 }
 
-// searches for DOTENV_PRIVATE_KEY* environment variables, returns all potential file/key pairs
-func findEnvFiles() []EnvFile {
-	var envFiles []EnvFile
+type EnvVar struct {
+	Name  string
+	Value string
+}
 
+// searches for DOTENV_PRIVATE_KEY* environment variables, returns first valid file/key pair
+func getEnvFile() (envFile EnvFile, err error) {
 	if Debug {
-		println("Checking for private key in environment")
+		fmt.Println("Checking for private key in environment")
 	}
 
+	// Search for valid key / with corresponding EnvFile
+	keysInEnv := 0
 	for _, env := range os.Environ() {
 		if strings.HasPrefix(env, "DOTENV_PRIVATE_KEY") {
 			parts := strings.SplitN(env, "=", 2)
 			if len(parts) != 2 || parts[1] == "" {
 				continue
 			}
+			keysInEnv++
 
-			varName := parts[0]
-			keyHex := parts[1]
+			varName, keyHex := parts[0], parts[1]
 
 			// Map DOTENV_PRIVATE_KEY_SUFFIX to .env.suffix
 			fileName := ""
@@ -53,103 +55,121 @@ func findEnvFiles() []EnvFile {
 			}
 
 			if Debug {
-				println("Trying key " + varName + " with file " + fileName)
+				fmt.Printf("Found key %s and file %s\n", varName, fileName)
+				if keysInEnv > 1 {
+					fmt.Println("WARNING: Multiple private keys found in environment!")
+				}
 			}
-
-			envFiles = append(envFiles, EnvFile{Path: fileName, Key: keyHex})
+			if _, err := os.Stat(fileName); err == nil {
+				if privateKey, err := ecies.NewPrivateKeyFromHex(keyHex); err == nil {
+					return EnvFile{fileName, privateKey}, nil
+				} else if Debug {
+					fmt.Println("Invalid key format")
+				}
+			} else if Debug {
+				fmt.Printf("Unable to open: %s\n", fileName)
+			}
 		}
 	}
 
-	if len(envFiles) == 0 && Debug {
-		println("No key found")
+	// No valid file/key combination found
+	if keysInEnv == 0 {
+		if Debug {
+			fmt.Println("No key found")
+		}
+		err = fmt.Errorf("No key found")
+	} else {
+		err = fmt.Errorf("No valid file/key combination found")
 	}
 
-	return envFiles
+	return envFile, err
 }
 
-func processEnvFile(envFile *EnvFile) error {
+func decryptSecret(privateKey *ecies.PrivateKey, base64ciper string) string {
+	cipherBytes, _ := base64.StdEncoding.DecodeString(base64ciper)
+	plainBytes, _ := ecies.Decrypt(privateKey, cipherBytes)
+	return string(plainBytes)
+}
+
+func parseEnvVar(line string, privateKey *ecies.PrivateKey, name string) EnvVar {
+	if offset := strings.Index(line, "="); offset > 0 && line[0] != '#' {
+		varName := strings.TrimPrefix(line[:offset], "export ")
+		if varName != name && name != "" {
+			return EnvVar{}
+		}
+		value := line[offset+1:]
+
+		value = strings.TrimSpace(value)
+		if (strings.HasPrefix(value, `"`) && strings.HasSuffix(value, `"`)) ||
+			(strings.HasPrefix(value, `'`) && strings.HasSuffix(value, `'`)) {
+			value = value[1 : len(value)-1]
+		}
+
+		if strings.HasPrefix(value, "encrypted:") {
+			value = decryptSecret(privateKey, value[10:])
+		}
+		return EnvVar{varName, value}
+	}
+	return EnvVar{}
+}
+
+func getEnvVars(envFile *EnvFile, name string) (vars []EnvVar, err error) {
 	file, err := os.Open(envFile.Path)
 	if err != nil {
 		if Debug {
-			if os.IsNotExist(err) {
-				println("File not found: " + envFile.Path)
-			} else {
-				println("Unable to open: " + envFile.Path)
-			}
+			fmt.Printf("Unable to open %s: %v\n", envFile.Path, err)
 		}
-		return err
+		return []EnvVar{}, err
 	}
 	defer file.Close()
 
-	privateKey, err := ecies.NewPrivateKeyFromHex(envFile.Key)
-	if err != nil {
-		if Debug {
-			println("Invalid key format")
-		}
-		return err
-	}
-
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
-		line := scanner.Text()
-		if offset := strings.Index(line, "="); offset > 0 && line[0] != '#' {
-			varName := strings.TrimPrefix(line[:offset], "export ")
-			value := line[offset+1:]
-
-			value = strings.TrimSpace(value)
-			if (strings.HasPrefix(value, `"`) && strings.HasSuffix(value, `"`)) ||
-				(strings.HasPrefix(value, `'`) && strings.HasSuffix(value, `'`)) {
-				value = value[1 : len(value)-1]
-			}
-
-			if strings.HasPrefix(value, "encrypted:") {
-				cipherBytes, _ := base64.StdEncoding.DecodeString(value[10:])
-				plainBytes, _ := ecies.Decrypt(privateKey, cipherBytes)
-				EnvMap[varName] = string(plainBytes)
-			} else {
-				EnvMap[varName] = value
-			}
+		envVar := parseEnvVar(scanner.Text(), envFile.Key, name)
+		if envVar.Name == "" {
+			continue
 		}
+		vars = append(vars, envVar)
 	}
-
-	return scanner.Err()
-}
-
-func loadEnv() {
-	EnvMap = make(map[string]string)
-
-	for _, envFile := range findEnvFiles() {
-		err := processEnvFile(&envFile)
-		if err == nil {
-			return
-		}
-	}
-}
-
-func GetenvMap() map[string]string {
-	Once.Do(loadEnv)
-	return EnvMap
+	return vars, scanner.Err()
 }
 
 func Getenv(key string) string {
-	envMap := GetenvMap()
-	val, found := envMap[key]
-	if Debug {
-		if !found {
-			println("Not found in env file: " + key)
-		}
-		if len(val) == 0 {
-			println("Empty string value: " + key)
-		}
+	envFile, err := getEnvFile()
+	if Debug && (envFile.Key == nil || err != nil) {
+		fmt.Printf("Error finding envFile (%+v): %+v\n", envFile, err)
 	}
-	return val
+	if err != nil {
+		return ""
+	}
+	vars, err := getEnvVars(&envFile, key)
+	if Debug && (len(vars) != 1 || err != nil) {
+		fmt.Printf("Error retrieving (%s) (%d values): %+v\n", key, len(vars), err)
+	}
+	if err != nil || len(vars) == 0 {
+		return ""
+	}
+	return vars[0].Value
 }
 
 func Environ() []string {
-	m := GetenvMap()
-	env := make([]string, 0, len(m))
-	for k, v := range m {
-		env = append(env, k+"="+v)
+	envFile, err := getEnvFile()
+	if Debug && (envFile.Key == nil || err != nil) {
+		fmt.Printf("Error finding envFile (%+v): %+v\n", envFile, err)
+	}
+	if err != nil {
+		return []string{}
+	}
+	vars, err := getEnvVars(&envFile, "")
+	if Debug && (len(vars) == 0 || err != nil) {
+		fmt.Printf("Error retrieving all values (%d found): %+v\n", len(vars), err)
+	}
+	if err != nil {
+		return []string{}
+	}
+	env := make([]string, 0, len(vars))
+	for _, v := range vars {
+		env = append(env, v.Name+"="+v.Value)
 	}
 	return env
 }

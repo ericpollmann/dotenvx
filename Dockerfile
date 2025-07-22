@@ -5,7 +5,7 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags='-s -w -extldflags -static -a -installsuffix' -o decrypt ./cmd/decrypt
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags=-s -o decrypt ./cmd/decrypt
 RUN upx --best --lzma decrypt
 
 # Final scratch image

@@ -1,9 +1,14 @@
 test:
 	go test ./... -cover -count 1
-	docker build -t dotenvx-decrypt .
+	docker build -q -t dotenvx-decrypt .
 	docker images | head -2
 	docker run -e DOTENV_PRIVATE_KEY="2ff9d3716a37e630e0643447beac508a1e9963444d3ca00a6a22dbf2970dc03d" dotenvx-decrypt
 	docker run -e DOTENV_PRIVATE_KEY_PRODUCTION="7d797417f477635f8753c5325d5a68552ab7048f46c518be7f0ae3bc245d3ab8" dotenvx-decrypt
+
+cover:
+	go test ./... -cover -covermode=atomic -coverprofile=/tmp/coverage.out -count 1
+	go tool cover -html=/tmp/coverage.out -o /tmp/coverage.html
+	open /tmp/coverage.html
 
 commit: test
 	go fmt ./...

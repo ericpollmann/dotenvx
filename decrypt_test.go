@@ -4,11 +4,16 @@ import (
 	"os"
 	"runtime"
 	"strings"
-	"sync"
 	"testing"
+
+	ecies "github.com/ecies/go/v2"
 )
 
-// reset clears cached state for testing
+func init() {
+	Debug = true
+}
+
+// reset sets up environment variables for testing
 func reset(env string) {
 	if env == "dev" {
 		os.Setenv("DOTENV_PRIVATE_KEY", "2ff9d3716a37e630e0643447beac508a1e9963444d3ca00a6a22dbf2970dc03d")
@@ -20,10 +25,6 @@ func reset(env string) {
 	} else {
 		os.Unsetenv("DOTENV_PRIVATE_KEY_PRODUCTION")
 	}
-	Mu.Lock()
-	defer Mu.Unlock()
-	Once = sync.Once{}
-	EnvMap = nil
 }
 
 func TestDevelopment(t *testing.T) {
@@ -56,10 +57,6 @@ func TestProduction(t *testing.T) {
 func TestNoKeys(t *testing.T) {
 	reset("")
 
-	if len(GetenvMap()) != 0 {
-		t.Error("no keys: expected empty map")
-	}
-
 	if len(Environ()) != 0 {
 		t.Error("no keys: expected empty environ")
 	}
@@ -69,20 +66,16 @@ func TestNoKeys(t *testing.T) {
 	}
 }
 
-func TestFileNotFound(t *testing.T) {
-	reset("dev")
-
-	// Change to a directory where .env doesn't exist
+func inTempDir(t *testing.T) string {
+	tempDir := t.TempDir()
 	originalDir, _ := os.Getwd()
-	defer os.Chdir(originalDir)
-
-	tempDir := "/tmp"
 	os.Chdir(tempDir)
-	reset("dev")
+	return originalDir
+}
 
-	if len(GetenvMap()) != 0 {
-		t.Error("file not found: expected empty map")
-	}
+func TestFileNotFound(t *testing.T) {
+	defer os.Chdir(inTempDir(t))
+	reset("dev")
 
 	if len(Environ()) != 0 {
 		t.Error("file not found: expected empty environ")
@@ -94,16 +87,7 @@ func TestFileNotFound(t *testing.T) {
 }
 
 func TestQuotedValues(t *testing.T) {
-	// Create temp directory for test
-	tempDir, err := os.MkdirTemp("", "dotenvx_quoted_test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	originalDir, _ := os.Getwd()
-	defer os.Chdir(originalDir)
-	os.Chdir(tempDir)
+	defer os.Chdir(inTempDir(t))
 
 	// Create .env file with quoted values
 	envContent := `# Test file with quoted values
@@ -141,16 +125,7 @@ ENCRYPTED_UNQUOTED=encrypted:BL8cvfR8496FAJV3dbdSZj/D6qlhOc3lAhuAB24AGp4WASPH8BB
 }
 
 func TestCustomEnvironments(t *testing.T) {
-	// Create temp directory for test
-	tempDir, err := os.MkdirTemp("", "dotenvx_custom_env_test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	originalDir, _ := os.Getwd()
-	defer os.Chdir(originalDir)
-	os.Chdir(tempDir)
+	defer os.Chdir(inTempDir(t))
 
 	// Create multiple env files
 	files := map[string]string{
@@ -198,16 +173,7 @@ func TestCustomEnvironments(t *testing.T) {
 }
 
 func TestEdgeCases(t *testing.T) {
-	// Create temp directory for test
-	tempDir, err := os.MkdirTemp("", "dotenvx_edge_test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	originalDir, _ := os.Getwd()
-	defer os.Chdir(originalDir)
-	os.Chdir(tempDir)
+	defer os.Chdir(inTempDir(t))
 
 	// Test empty env var value
 	reset("")
@@ -228,8 +194,6 @@ func TestEdgeCases(t *testing.T) {
 
 	// Test with debug mode to cover debug statements
 	reset("")
-	Debug = true
-	defer func() { Debug = false }()
 
 	// Set a key for a file that doesn't exist first
 	os.Setenv("DOTENV_PRIVATE_KEY_MISSING", "2ff9d3716a37e630e0643447beac508a1e9963444d3ca00a6a22dbf2970dc03d")
@@ -276,20 +240,7 @@ func TestEdgeCases(t *testing.T) {
 }
 
 func TestInvalidKeyFormat(t *testing.T) {
-	// Create temp directory for test
-	tempDir, err := os.MkdirTemp("", "dotenvx_invalid_key_test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	originalDir, _ := os.Getwd()
-	defer os.Chdir(originalDir)
-	os.Chdir(tempDir)
-
-	// Enable debug mode
-	Debug = true
-	defer func() { Debug = false }()
+	defer os.Chdir(inTempDir(t))
 
 	// Create a file
 	if err := os.WriteFile(".env", []byte(`TEST=value`), 0644); err != nil {
@@ -328,21 +279,7 @@ func TestFilePermissionError(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Skipping permission test on Windows")
 	}
-
-	// Create temp directory for test
-	tempDir, err := os.MkdirTemp("", "dotenvx_perm_test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	originalDir, _ := os.Getwd()
-	defer os.Chdir(originalDir)
-	os.Chdir(tempDir)
-
-	// Enable debug mode
-	Debug = true
-	defer func() { Debug = false }()
+	defer os.Chdir(inTempDir(t))
 
 	// Create a file with no read permissions
 	if err := os.WriteFile(".env", []byte(`TEST=value`), 0000); err != nil {
@@ -358,5 +295,128 @@ func TestFilePermissionError(t *testing.T) {
 	// Should log "Unable to open: .env"
 	if got := Getenv("TEST"); got != "" {
 		t.Errorf("Expected empty when file cannot be read, got %q", got)
+	}
+}
+
+func TestEnvironDebugCoverage(t *testing.T) {
+	defer os.Chdir(inTempDir(t))
+
+	// Test 1: No keys - should trigger debug in Environ
+	reset("")
+	for _, env := range os.Environ() {
+		if strings.HasPrefix(env, "DOTENV_PRIVATE_KEY") {
+			parts := strings.SplitN(env, "=", 2)
+			if len(parts) > 0 {
+				os.Unsetenv(parts[0])
+			}
+		}
+	}
+
+	// Should log "Error finding envFile" and return empty
+	if got := Environ(); len(got) != 0 {
+		t.Errorf("Expected empty environ with no keys, got %d items", len(got))
+	}
+
+	// Test 2: Valid key but no file - should trigger getEnvVars debug
+	reset("")
+	os.Setenv("DOTENV_PRIVATE_KEY", "2ff9d3716a37e630e0643447beac508a1e9963444d3ca00a6a22dbf2970dc03d")
+	defer os.Unsetenv("DOTENV_PRIVATE_KEY")
+
+	// No .env file exists, should log "File not found: .env" and "Error retrieving all values"
+	if got := Environ(); len(got) != 0 {
+		t.Errorf("Expected empty environ when file not found, got %d items", len(got))
+	}
+
+	// Test 3: Invalid key format in getEnvVars
+	if err := os.WriteFile(".env", []byte(`TEST=encrypted:invalid`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Should still work for non-encrypted values but log about invalid format
+	if err := os.WriteFile(".env", []byte(`PLAIN=value`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	env := Environ()
+	found := false
+	for _, e := range env {
+		if e == "PLAIN=value" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("Expected to find PLAIN=value in environ")
+	}
+}
+
+func TestGetEnvVarsDebugCoverage(t *testing.T) {
+	defer os.Chdir(inTempDir(t))
+
+	// Test 1: File not found debug logging in getEnvVars
+	reset("")
+	os.Setenv("DOTENV_PRIVATE_KEY", "2ff9d3716a37e630e0643447beac508a1e9963444d3ca00a6a22dbf2970dc03d")
+	defer os.Unsetenv("DOTENV_PRIVATE_KEY")
+
+	// Direct call to trigger specific debug paths
+	privateKey, _ := ecies.NewPrivateKeyFromHex("2ff9d3716a37e630e0643447beac508a1e9963444d3ca00a6a22dbf2970dc03d")
+	envFile := EnvFile{Path: ".env.missing", Key: privateKey}
+	vars, err := getEnvVars(&envFile, "")
+	if err == nil || len(vars) != 0 {
+		t.Error("Expected error and empty vars for missing file")
+	}
+
+	// Test 2: Invalid key format debug logging
+	if err := os.WriteFile(".env", []byte(`TEST=value`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// For invalid key test, the file should still be readable but won't decrypt
+	envFile = EnvFile{Path: ".env", Key: nil}
+	vars, err = getEnvVars(&envFile, "")
+	// With nil key, non-encrypted values can still be read
+	if err != nil {
+		t.Errorf("Expected no error for reading plain values, got: %v", err)
+	}
+	// Should have read TEST=value
+	if len(vars) != 1 || vars[0].Name != "TEST" || vars[0].Value != "value" {
+		t.Errorf("Expected to read TEST=value, got: %+v", vars)
+	}
+
+	// Test 3: Permission error debug logging
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(".env", 0000); err != nil {
+			t.Fatal(err)
+		}
+		defer os.Chmod(".env", 0644)
+
+		privateKey2, _ := ecies.NewPrivateKeyFromHex("2ff9d3716a37e630e0643447beac508a1e9963444d3ca00a6a22dbf2970dc03d")
+		envFile = EnvFile{Path: ".env", Key: privateKey2}
+		vars, err = getEnvVars(&envFile, "")
+		if err == nil || len(vars) != 0 {
+			t.Error("Expected error and empty vars for permission denied")
+		}
+	}
+}
+
+func TestEnvironGetEnvVarsError(t *testing.T) {
+	defer os.Chdir(inTempDir(t))
+
+	// Create a file with bad permissions
+	if err := os.WriteFile(".env", []byte(`TEST=value`), 0000); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(".env", 0644)
+
+	reset("")
+	os.Setenv("DOTENV_PRIVATE_KEY", "2ff9d3716a37e630e0643447beac508a1e9963444d3ca00a6a22dbf2970dc03d")
+	defer os.Unsetenv("DOTENV_PRIVATE_KEY")
+
+	// Should trigger debug logging and error path in Environ
+	if runtime.GOOS != "windows" {
+		result := Environ()
+		if len(result) != 0 {
+			t.Errorf("Expected empty environ when file can't be read, got %d items", len(result))
+		}
 	}
 }
