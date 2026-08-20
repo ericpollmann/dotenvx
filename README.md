@@ -42,7 +42,12 @@ GREETING=world
 
 ## How It Works
 
-1. Checks for `DOTENV_PRIVATE_KEY_PRODUCTION` → uses `.env.production`, falls back to `DOTENV_PRIVATE_KEY` → uses `.env`
+1. Picks one file from the `DOTENV_PRIVATE_KEY*` variables in the environment, by name:
+   `DOTENV_PRIVATE_KEY` → `.env` wins whenever `.env` exists; otherwise the one
+   `DOTENV_PRIVATE_KEY_SUFFIX` whose `.env.suffix` exists (`DOTENV_PRIVATE_KEY_PRODUCTION`
+   → `.env.production`). Two or more suffixed keys with existing files and no
+   `DOTENV_PRIVATE_KEY` is ambiguous, and nothing is decrypted: `Getenv` returns `""`
+   and `Environ` returns nothing. Set `dotenvx.Debug = true` to see the candidates.
 2. Parses env file for `encrypted:` prefixed values  
 3. Decrypts using ECIES (compatible with eciesjs/dotenvx)
 4. No secrets in RAM or environment after use

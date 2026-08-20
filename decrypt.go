@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	ecies "github.com/ecies/go/v2"
@@ -24,51 +25,95 @@ type EnvVar struct {
 	Value string
 }
 
-// searches for DOTENV_PRIVATE_KEY* environment variables, returns first valid file/key pair
+const keyVar = "DOTENV_PRIVATE_KEY"
+
+type keyCandidate struct {
+	varName  string
+	fileName string
+	keyHex   string
+}
+
+// Mirrors dotenvx's own convention: DOTENV_PRIVATE_KEY_QA_TEST -> .env.qa.test
+func envFileForKeyVar(varName string) string {
+	if varName == keyVar {
+		return ".env"
+	}
+	if suffix := strings.TrimPrefix(varName, keyVar+"_"); suffix != varName {
+		return ".env." + strings.ReplaceAll(strings.ToLower(suffix), "_", ".")
+	}
+	return ""
+}
+
+// A first-match scan of os.Environ picks by setenv insertion order, so adding or
+// renaming an unrelated key silently switches which file gets decrypted.
+func chooseCandidate(candidates []keyCandidate) (*keyCandidate, error) {
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].varName < candidates[j].varName })
+
+	for i := range candidates {
+		if candidates[i].varName == keyVar {
+			if Debug && len(candidates) > 1 {
+				fmt.Printf("Multiple private keys match a file; %s wins over the suffixed ones\n", keyVar)
+			}
+			return &candidates[i], nil
+		}
+	}
+	switch len(candidates) {
+	case 0:
+		return nil, nil
+	case 1:
+		return &candidates[0], nil
+	}
+
+	names := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		names = append(names, c.varName+" -> "+c.fileName)
+	}
+	return nil, fmt.Errorf("Ambiguous private key: %s, and no %s for .env to break the tie",
+		strings.Join(names, ", "), keyVar)
+}
+
 func getEnvFile() (envFile EnvFile, err error) {
 	if Debug {
 		fmt.Println("Checking for private key in environment")
 	}
 
-	// Search for valid key / with corresponding EnvFile
 	keysInEnv := 0
+	var candidates []keyCandidate
 	for _, env := range os.Environ() {
-		if strings.HasPrefix(env, "DOTENV_PRIVATE_KEY") {
-			parts := strings.SplitN(env, "=", 2)
-			if len(parts) != 2 || parts[1] == "" {
-				continue
-			}
-			keysInEnv++
+		if !strings.HasPrefix(env, keyVar) {
+			continue
+		}
+		parts := strings.SplitN(env, "=", 2)
+		if len(parts) != 2 || parts[1] == "" {
+			continue
+		}
+		keysInEnv++
 
-			varName, keyHex := parts[0], parts[1]
-
-			// Map DOTENV_PRIVATE_KEY_SUFFIX to .env.suffix
-			fileName := ""
-			if varName == "DOTENV_PRIVATE_KEY" {
-				fileName = ".env"
-			} else if strings.HasPrefix(varName, "DOTENV_PRIVATE_KEY_") {
-				suffix := strings.TrimPrefix(varName, "DOTENV_PRIVATE_KEY_")
-				// Convert suffix to lowercase, replace _ with .
-				suffix = strings.ToLower(suffix)
-				suffix = strings.ReplaceAll(suffix, "_", ".")
-				fileName = ".env." + suffix
-			}
-
+		candidate := keyCandidate{parts[0], envFileForKeyVar(parts[0]), parts[1]}
+		if Debug {
+			fmt.Printf("Found key %s and file %s\n", candidate.varName, candidate.fileName)
+		}
+		if _, err := os.Stat(candidate.fileName); err != nil {
 			if Debug {
-				fmt.Printf("Found key %s and file %s\n", varName, fileName)
-				if keysInEnv > 1 {
-					fmt.Println("WARNING: Multiple private keys found in environment!")
-				}
+				fmt.Printf("Unable to open: %s\n", candidate.fileName)
 			}
-			if _, err := os.Stat(fileName); err == nil {
-				if privateKey, err := ecies.NewPrivateKeyFromHex(keyHex); err == nil {
-					return EnvFile{fileName, privateKey}, nil
-				} else if Debug {
-					fmt.Println("Invalid key format")
-				}
-			} else if Debug {
-				fmt.Printf("Unable to open: %s\n", fileName)
-			}
+			continue
+		}
+		candidates = append(candidates, candidate)
+	}
+
+	chosen, err := chooseCandidate(candidates)
+	if err != nil {
+		if Debug {
+			fmt.Println(err)
+		}
+		return envFile, err
+	}
+	if chosen != nil {
+		if privateKey, err := ecies.NewPrivateKeyFromHex(chosen.keyHex); err == nil {
+			return EnvFile{chosen.fileName, privateKey}, nil
+		} else if Debug {
+			fmt.Println("Invalid key format")
 		}
 	}
 
