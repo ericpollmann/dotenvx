@@ -347,6 +347,128 @@ func TestEnviron_DebugMode(t *testing.T) {
 	_ = Environ()
 }
 
+func TestEnvFileForKeyVar(t *testing.T) {
+	tests := map[string]string{
+		"DOTENV_PRIVATE_KEY":         ".env",
+		"DOTENV_PRIVATE_KEY_STAGING": ".env.staging",
+		"DOTENV_PRIVATE_KEY_QA_TEST": ".env.qa.test",
+		"DOTENV_PRIVATE_KEYS":        "",
+	}
+	for varName, expected := range tests {
+		if got := envFileForKeyVar(varName); got != expected {
+			t.Errorf("For %q: expected %q, got %q", varName, expected, got)
+		}
+	}
+}
+
+// os.Environ lists variables in setenv insertion order, so setting the same two
+// keys in either order is what makes this a test of precedence and not of luck.
+func setKeys(t *testing.T, names ...string) {
+	t.Helper()
+	clearEnvKeys()
+	for _, name := range names {
+		os.Setenv(name, "2ff9d3716a37e630e0643447beac508a1e9963444d3ca00a6a22dbf2970dc03d")
+		t.Cleanup(func() { os.Unsetenv(name) })
+	}
+}
+
+func TestGetEnvFile_UnsuffixedWinsInEitherOrder(t *testing.T) {
+	defer os.Chdir(inTempDir(t))
+
+	os.WriteFile(".env", []byte("TEST=default"), 0644)
+	os.WriteFile(".env.staging", []byte("TEST=staging"), 0644)
+	os.WriteFile(".env.workflowstore", []byte("TEST=workflowstore"), 0644)
+
+	orders := [][]string{
+		{"DOTENV_PRIVATE_KEY", "DOTENV_PRIVATE_KEY_STAGING", "DOTENV_PRIVATE_KEY_WORKFLOWSTORE"},
+		{"DOTENV_PRIVATE_KEY_WORKFLOWSTORE", "DOTENV_PRIVATE_KEY_STAGING", "DOTENV_PRIVATE_KEY"},
+		{"DOTENV_PRIVATE_KEY_STAGING", "DOTENV_PRIVATE_KEY", "DOTENV_PRIVATE_KEY_WORKFLOWSTORE"},
+	}
+	for _, order := range orders {
+		setKeys(t, order...)
+
+		envFile, err := getEnvFile()
+		if err != nil {
+			t.Fatalf("For order %v: expected no error, got %v", order, err)
+		}
+		if envFile.Path != ".env" {
+			t.Errorf("For order %v: expected .env, got %q", order, envFile.Path)
+		}
+		if got := Getenv("TEST"); got != "default" {
+			t.Errorf("For order %v: expected Getenv 'default', got %q", order, got)
+		}
+	}
+}
+
+func TestGetEnvFile_SingleSuffixedKeyWithOtherKeysPresent(t *testing.T) {
+	defer os.Chdir(inTempDir(t))
+
+	// Only .env.staging exists, so neither the unsuffixed nor the prod key applies
+	os.WriteFile(".env.staging", []byte("TEST=staging"), 0644)
+	setKeys(t, "DOTENV_PRIVATE_KEY_STAGING", "DOTENV_PRIVATE_KEY", "DOTENV_PRIVATE_KEY_PROD")
+
+	envFile, err := getEnvFile()
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	if envFile.Path != ".env.staging" {
+		t.Errorf("Expected .env.staging, got %q", envFile.Path)
+	}
+}
+
+func TestGetEnvFile_MultipleSuffixedIsAmbiguous(t *testing.T) {
+	defer os.Chdir(inTempDir(t))
+
+	os.WriteFile(".env.staging", []byte("TEST=staging"), 0644)
+	os.WriteFile(".env.workflowstore", []byte("TEST=workflowstore"), 0644)
+
+	for _, order := range [][]string{
+		{"DOTENV_PRIVATE_KEY_STAGING", "DOTENV_PRIVATE_KEY_WORKFLOWSTORE"},
+		{"DOTENV_PRIVATE_KEY_WORKFLOWSTORE", "DOTENV_PRIVATE_KEY_STAGING"},
+	} {
+		setKeys(t, order...)
+
+		_, err := getEnvFile()
+		if err == nil {
+			t.Fatalf("For order %v: expected an ambiguity error", order)
+		}
+		expected := "Ambiguous private key: DOTENV_PRIVATE_KEY_STAGING -> .env.staging, " +
+			"DOTENV_PRIVATE_KEY_WORKFLOWSTORE -> .env.workflowstore, and no DOTENV_PRIVATE_KEY for .env to break the tie"
+		if err.Error() != expected {
+			t.Errorf("For order %v: expected %q, got %q", order, expected, err.Error())
+		}
+		if got := Getenv("TEST"); got != "" {
+			t.Errorf("For order %v: expected Getenv to yield \"\", got %q", order, got)
+		}
+		if got := Environ(); len(got) != 0 {
+			t.Errorf("For order %v: expected Environ to yield nothing, got %v", order, got)
+		}
+	}
+}
+
+func TestGetEnvFile_AmbiguityDebugMode(t *testing.T) {
+	defer os.Chdir(inTempDir(t))
+
+	Debug = true
+	defer func() { Debug = false }()
+
+	os.WriteFile(".env", []byte("TEST=default"), 0644)
+	os.WriteFile(".env.staging", []byte("TEST=staging"), 0644)
+
+	setKeys(t, "DOTENV_PRIVATE_KEY_STAGING", "DOTENV_PRIVATE_KEY")
+	if envFile, err := getEnvFile(); err != nil || envFile.Path != ".env" {
+		t.Errorf("Expected .env with no error, got %q %v", envFile.Path, err)
+	}
+
+	// The unsuffixed key stays set but .env is gone, so it cannot break the tie
+	os.Remove(".env")
+	os.WriteFile(".env.prod", []byte("TEST=prod"), 0644)
+	setKeys(t, "DOTENV_PRIVATE_KEY_STAGING", "DOTENV_PRIVATE_KEY_PROD", "DOTENV_PRIVATE_KEY")
+	if _, err := getEnvFile(); err == nil {
+		t.Error("Expected an ambiguity error")
+	}
+}
+
 // Test multiple keys warning with debug output
 func TestGetEnvFile_MultipleKeysWarning(t *testing.T) {
 	defer os.Chdir(inTempDir(t))
@@ -358,7 +480,7 @@ func TestGetEnvFile_MultipleKeysWarning(t *testing.T) {
 	// Create only .env.prod file so DOTENV_PRIVATE_KEY won't find .env
 	os.WriteFile(".env.prod", []byte("TEST=prod"), 0644)
 
-	// Set multiple keys - the first key won't find a file, so we'll continue and hit the warning
+	// Set multiple keys - the unsuffixed one has no file, so it must not shadow .env.prod
 	os.Setenv("DOTENV_PRIVATE_KEY", "2ff9d3716a37e630e0643447beac508a1e9963444d3ca00a6a22dbf2970dc03d")
 	os.Setenv("DOTENV_PRIVATE_KEY_PROD", "2ff9d3716a37e630e0643447beac508a1e9963444d3ca00a6a22dbf2970dc03d")
 	defer os.Unsetenv("DOTENV_PRIVATE_KEY")
