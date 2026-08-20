@@ -436,6 +436,117 @@ func TestGetEnvFile_EmptyKeyValue(t *testing.T) {
 	}
 }
 
+// Test DecryptFile
+const testKeyHex = "2ff9d3716a37e630e0643447beac508a1e9963444d3ca00a6a22dbf2970dc03d"
+
+// "hello" encrypted to testKeyHex's public key
+const testCipher = "encrypted:BL8cvfR8496FAJV3dbdSZj/D6qlhOc3lAhuAB24AGp4WASPH8BBoe21T+T9jlO/M0GY03RZ94Etk7VPWIP21vh+YLGu0fWe2usFdTFs+/BnlsT8K8+V9Xte/yXA2NhrRxy3T7ygL"
+
+func TestDecryptFile_PlainAndEncrypted(t *testing.T) {
+	defer os.Chdir(inTempDir(t))
+
+	os.WriteFile(".env.staging", []byte("PLAIN=plain value\nSECRET="+testCipher+"\n"), 0644)
+
+	vars, err := DecryptFile(".env.staging", testKeyHex)
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	if len(vars) != 2 {
+		t.Fatalf("Expected 2 vars, got %d", len(vars))
+	}
+	if vars[0].Name != "PLAIN" || vars[0].Value != "plain value" {
+		t.Errorf("Expected PLAIN=plain value, got %s=%s", vars[0].Name, vars[0].Value)
+	}
+	if vars[1].Name != "SECRET" || vars[1].Value != "hello" {
+		t.Errorf("Expected SECRET=hello, got %s=%s", vars[1].Name, vars[1].Value)
+	}
+}
+
+// The whole reason this exists: Getenv and Environ return "" here, so a caller
+// cannot tell a wrong key from an empty secret.
+func TestDecryptFile_WrongKeyErrors(t *testing.T) {
+	defer os.Chdir(inTempDir(t))
+
+	wrong, err := ecies.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	os.WriteFile(".env", []byte("SECRET="+testCipher+"\n"), 0644)
+
+	vars, err := DecryptFile(".env", wrong.Hex())
+	if err == nil {
+		t.Fatalf("Expected error with a valid but wrong key, got vars %+v", vars)
+	}
+	if !strings.Contains(err.Error(), "SECRET") {
+		t.Errorf("Expected the error to name SECRET, got %v", err)
+	}
+}
+
+func TestDecryptFile_InvalidKeyHex(t *testing.T) {
+	defer os.Chdir(inTempDir(t))
+
+	os.WriteFile(".env", []byte("PLAIN=value\n"), 0644)
+
+	if _, err := DecryptFile(".env", "not-hex"); err == nil {
+		t.Error("Expected error with invalid key hex")
+	}
+}
+
+func TestDecryptFile_MissingFile(t *testing.T) {
+	defer os.Chdir(inTempDir(t))
+
+	if _, err := DecryptFile(".env.absent", testKeyHex); err == nil {
+		t.Error("Expected error for missing file")
+	}
+}
+
+func TestDecryptFile_BadBase64Errors(t *testing.T) {
+	defer os.Chdir(inTempDir(t))
+
+	os.WriteFile(".env", []byte("SECRET=encrypted:!!!not base64!!!\n"), 0644)
+
+	_, err := DecryptFile(".env", testKeyHex)
+	if err == nil {
+		t.Fatal("Expected error for undecodable base64")
+	}
+	if !strings.Contains(err.Error(), "SECRET") {
+		t.Errorf("Expected the error to name SECRET, got %v", err)
+	}
+}
+
+func TestDecryptFile_CommentsAndBlankLinesSkipped(t *testing.T) {
+	defer os.Chdir(inTempDir(t))
+
+	os.WriteFile(".env", []byte("# a comment\n\nVAR1=one\nVAR2=two\n"), 0644)
+
+	vars, err := DecryptFile(".env", testKeyHex)
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	if len(vars) != 2 {
+		t.Errorf("Expected 2 vars, got %d", len(vars))
+	}
+}
+
+// A file with nothing encrypted in it must not need a decryptable key to read.
+func TestDecryptFile_PlainFileNeedsNoMatchingKey(t *testing.T) {
+	defer os.Chdir(inTempDir(t))
+
+	unrelated, err := ecies.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	os.WriteFile(".env", []byte("VAR1=one\n"), 0644)
+
+	vars, err := DecryptFile(".env", unrelated.Hex())
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	if len(vars) != 1 || vars[0].Value != "one" {
+		t.Errorf("Expected VAR1=one, got %+v", vars)
+	}
+}
+
 // Test the integration paths
 func TestIntegration_SuccessfulDecryption(t *testing.T) {
 	defer os.Chdir(inTempDir(t))

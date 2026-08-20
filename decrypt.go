@@ -85,32 +85,59 @@ func getEnvFile() (envFile EnvFile, err error) {
 	return envFile, err
 }
 
+const encryptedPrefix = "encrypted:"
+
 func decryptSecret(privateKey *ecies.PrivateKey, base64ciper string) string {
 	cipherBytes, _ := base64.StdEncoding.DecodeString(base64ciper)
 	plainBytes, _ := ecies.Decrypt(privateKey, cipherBytes)
 	return string(plainBytes)
 }
 
-func parseEnvVar(line string, privateKey *ecies.PrivateKey, name string) EnvVar {
-	if offset := strings.Index(line, "="); offset > 0 && line[0] != '#' {
-		varName := strings.TrimPrefix(line[:offset], "export ")
-		if varName != name && name != "" {
-			return EnvVar{}
-		}
-		value := line[offset+1:]
-
-		value = strings.TrimSpace(value)
-		if (strings.HasPrefix(value, `"`) && strings.HasSuffix(value, `"`)) ||
-			(strings.HasPrefix(value, `'`) && strings.HasSuffix(value, `'`)) {
-			value = value[1 : len(value)-1]
-		}
-
-		if strings.HasPrefix(value, "encrypted:") {
-			value = decryptSecret(privateKey, value[10:])
-		}
-		return EnvVar{varName, value}
+// Wrong-key decryption fails the AEAD tag check rather than returning garbage,
+// so propagating the error is what separates it from a genuinely empty value.
+func decryptSecretStrict(privateKey *ecies.PrivateKey, base64cipher string) (string, error) {
+	cipherBytes, err := base64.StdEncoding.DecodeString(base64cipher)
+	if err != nil {
+		return "", fmt.Errorf("base64: %w", err)
 	}
-	return EnvVar{}
+	plainBytes, err := ecies.Decrypt(privateKey, cipherBytes)
+	if err != nil {
+		return "", err
+	}
+	if len(plainBytes) == 0 && len(cipherBytes) > 0 {
+		return "", fmt.Errorf("decrypted to an empty value")
+	}
+	return string(plainBytes), nil
+}
+
+// ok is false for blank lines, comments, and -- when name is non-empty --
+// every variable except that one.
+func splitEnvLine(line, name string) (varName, value string, ok bool) {
+	offset := strings.Index(line, "=")
+	if offset <= 0 || line[0] == '#' {
+		return "", "", false
+	}
+	varName = strings.TrimPrefix(line[:offset], "export ")
+	if name != "" && varName != name {
+		return "", "", false
+	}
+	value = strings.TrimSpace(line[offset+1:])
+	if (strings.HasPrefix(value, `"`) && strings.HasSuffix(value, `"`)) ||
+		(strings.HasPrefix(value, `'`) && strings.HasSuffix(value, `'`)) {
+		value = value[1 : len(value)-1]
+	}
+	return varName, value, true
+}
+
+func parseEnvVar(line string, privateKey *ecies.PrivateKey, name string) EnvVar {
+	varName, value, ok := splitEnvLine(line, name)
+	if !ok {
+		return EnvVar{}
+	}
+	if strings.HasPrefix(value, encryptedPrefix) {
+		value = decryptSecret(privateKey, value[len(encryptedPrefix):])
+	}
+	return EnvVar{varName, value}
 }
 
 func getEnvVars(envFile *EnvFile, name string) (vars []EnvVar, err error) {
@@ -132,6 +159,44 @@ func getEnvVars(envFile *EnvFile, name string) (vars []EnvVar, err error) {
 		vars = append(vars, envVar)
 	}
 	return vars, scanner.Err()
+}
+
+// Unlike Getenv and Environ, which pick a file by scanning the environment for
+// any usable DOTENV_PRIVATE_KEY* and silently yield "" for whatever they cannot
+// decrypt, this names one file and one key and fails on the first value that
+// does not decrypt. Callers holding secrets they must not run without want this
+// one.
+func DecryptFile(path string, privateKeyHex string) ([]EnvVar, error) {
+	privateKey, err := ecies.NewPrivateKeyFromHex(privateKeyHex)
+	if err != nil {
+		return nil, fmt.Errorf("%s: private key: %w", path, err)
+	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var vars []EnvVar
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		varName, value, ok := splitEnvLine(scanner.Text(), "")
+		if !ok {
+			continue
+		}
+		if strings.HasPrefix(value, encryptedPrefix) {
+			value, err = decryptSecretStrict(privateKey, value[len(encryptedPrefix):])
+			if err != nil {
+				return nil, fmt.Errorf("%s: %s: %w", path, varName, err)
+			}
+		}
+		vars = append(vars, EnvVar{varName, value})
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return vars, nil
 }
 
 func Getenv(key string) string {
